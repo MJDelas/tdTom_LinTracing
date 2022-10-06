@@ -1,0 +1,230 @@
+---
+title: "Foxa2_tracing - quantifications and plotting"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r message=FALSE}
+# Load all packages
+rm(list=ls())
+
+setwd("~/dev/repos/tdTom_LinTracing/R_analysis/")
+
+library(tidyverse)
+library(readxl)
+library(pheatmap)
+library(RColorBrewer)
+library(lemon)
+library(viridis)
+
+```
+
+### Load data
+
+```{r}
+clean_segment <- read.csv("LinTraced_segment_plot.csv")
+  
+```
+
+### Find thresholds
+```{r fig.width=5, fig.height=4}
+
+sox2_thres = 90
+nkx22_thress = 90
+tdt_thress = 50
+
+ggplot(clean_segment, aes(x=SOX2_avg_signal, y=NKX22_ave_signal)) +
+  geom_hex(binwidth = c(0.04, 0.04))  +
+  geom_hline(yintercept=nkx22_thress,  linetype="dashed", color = "red") +
+  geom_vline(xintercept=sox2_thres,  linetype="dashed", color = "red") +
+  scale_x_log10()+
+  scale_y_log10() +
+  facet_wrap(~ embryoID) +
+  theme_bw(base_size = 12)
+
+ggplot(clean_segment, aes(x=SOX2_avg_signal, y=NKX22_ave_signal)) +
+  geom_point(size=0.2, alpha=0.5) +
+  geom_hline(yintercept=nkx22_thress,  linetype="dashed", color = "red") +
+  geom_vline(xintercept=sox2_thres,  linetype="dashed", color = "red") +
+  scale_x_log10()+
+  scale_y_log10() +
+  facet_wrap(~ embryoID) +
+  theme_bw(base_size = 12)
+
+```
+
+#### tdTomato
+
+```{r}
+
+ggplot(clean_segment, aes(x=tdTom_ave_signal, y=NKX22_ave_signal)) +
+  geom_point(size=0.2, aes(color=log10(tdTom_ave_signal))) +
+  scale_color_gradient2(low = "grey", mid = "white", high = "brown") +
+  geom_hline(yintercept=nkx22_thress,  linetype="dashed", color = "blue") +
+  geom_vline(xintercept=tdt_thress,  linetype="dashed", color = "blue") +
+  scale_x_log10()+
+  scale_y_log10() +
+  facet_wrap(~ embryoID) +
+  theme_bw(base_size = 12)
+
+ggplot(clean_segment, aes(x=tdTom_ave_signal, y=SOX2_avg_signal)) +
+  geom_point(size=0.2, aes(color=log10(tdTom_ave_signal))) +
+  scale_color_gradient2(low = "grey", mid = "white", high = "brown") +
+  geom_hline(yintercept=sox2_thres,  linetype="dashed", color = "blue") +
+  geom_vline(xintercept=tdt_thress,  linetype="dashed", color = "blue") +
+  scale_x_log10()+
+  scale_y_log10() +
+  facet_wrap(~ embryoID) +
+  theme_bw(base_size = 12)
+
+```
+
+### Plot cell type based on markers
+
+Use the position as a QC for how well the thresholds identify cell types.
+Nkx2.2 has background signal in endothelial cells because it's a mouse antibody. Filter by positions in the next step. 
+
+```{r}
+full_classified <- clean_segment %>%
+  mutate(celltype=if_else(SOX2_avg_signal > sox2_thres & NKX22_ave_signal > nkx22_thress, "p3",
+                          if_else(NKX22_ave_signal > nkx22_thress, "V3",
+                                  if_else(SOX2_avg_signal > sox2_thres,"Sox2_notp3","othercell")))) %>%
+         filter(elipse_x <1000, elipse_y<1500, elipse_x>0,elipse_y >0)
+
+
+ggplot(full_classified, aes(x=elipse_x, y=-elipse_y)) +
+  geom_point(size=0.2,aes(color=celltype)) +
+  scale_color_manual(values = c("Lightgrey","Darkgreen","DarkGrey","Magenta")) +
+  facet_wrap(~ embryoID) +
+  coord_fixed(ratio = 1) +
+  theme_bw(base_size = 8)
+
+```
+
+
+### Filter background Nkx22 cells based on position
+
+Nkx2.2-expressing cells that are positioned more than 2 standard deviations away from the mean (dashed red line) will be excluded. Visualize the excluded cells below.
+
+```{r}
+
+full_classified_filter_nkx22 <- full_classified %>%
+  filter(celltype %in% c("V3","p3")) %>%
+  group_by(Image) %>%
+  mutate(ave_nkx22_y = mean(elipse_y, na.rm = TRUE),
+         sd_nkx22_y = sd(elipse_y, na.rm = TRUE),
+         dev_y = abs(elipse_y-ave_nkx22_y))
+
+dotsize=0.2
+
+
+ggplot(full_classified_filter_nkx22, aes(x=elipse_x, y=-elipse_y)) +
+  geom_point(size=dotsize,aes(color=NKX22_ave_signal)) +
+  scale_color_continuous(type = "viridis") +
+  expand_limits(y=c(0,-1500),x=c(0,1000)) +
+  geom_hline(aes(yintercept=-(ave_nkx22_y+2*sd_nkx22_y)),linetype='dashed', col = 'red') +
+  facet_wrap(~ embryoID) +
+  coord_fixed(ratio = 1) +
+  theme_bw(base_size = 8)
+
+```
+
+Position filter for Nkx22 cells per Image
+
+```{r}
+nkx22_position_filter <- full_classified_filter_nkx22 %>%
+  mutate(nkx22_y2sd_filter=ave_nkx22_y+2*sd_nkx22_y) %>% 
+  select(Image,embryoID,nkx22_y2sd_filter) %>% unique()
+  
+```
+
+
+
+Re-classify adding the positional filter
+
+```{r}
+
+classified_filtered <- clean_segment %>%
+  left_join(nkx22_position_filter, by = c("Image","embryoID")) %>% 
+  mutate(celltype=if_else(SOX2_avg_signal > sox2_thres & NKX22_ave_signal > nkx22_thress & elipse_y < nkx22_y2sd_filter, "p3",
+                          if_else(NKX22_ave_signal > nkx22_thress & elipse_y < nkx22_y2sd_filter, "V3",
+                                  if_else(SOX2_avg_signal > sox2_thres,"Sox2_notp3","othercell")))) %>%
+         filter(elipse_x <1000, elipse_y<1500, elipse_x>0,elipse_y >0)
+
+
+ggplot(classified_filtered, aes(x=elipse_x, y=-elipse_y)) +
+  geom_point(size=0.2,aes(color=celltype)) +
+  scale_color_manual(values = c("Lightgrey","Darkgreen","DarkGrey","Magenta")) +
+  facet_wrap(~ embryoID) +
+  coord_fixed(ratio = 1) +
+  theme_bw(base_size = 8)
+
+```
+
+
+### Classify traced cells 
+
+```{r}
+full_classified_tdtom  <- classified_filtered %>%
+           group_by(Image) %>%
+           mutate(tdtom_status = if_else(tdTom_ave_signal > tdt_thress,"traced","untraced")) 
+
+```
+
+QC plot "traced". 
+
+We see that they are in the expected positions.
+
+```{r}
+ggplot(full_classified_tdtom, aes(x=elipse_x, y=-elipse_y)) +
+  geom_point(size=0.2,aes(color=tdtom_status)) +
+  facet_wrap(~ embryoID) +
+  coord_fixed(ratio = 1) +
+  theme_bw(base_size = 8)
+```
+
+QC plot "traced" only by cell type
+```{r}
+ggplot(full_classified_tdtom %>% filter(tdtom_status=="traced"), aes(x=elipse_x, y=-elipse_y)) +
+  geom_point(size=0.2,aes(color=celltype), alpha=0.5) +
+  scale_color_manual(values = c("Lightgrey","Darkgreen","orange","Magenta")) +
+  facet_wrap(~ embryoID) +
+  coord_fixed(ratio = 1) +
+  theme_bw(base_size = 8)
+
+```
+
+## Count traced cells
+
+How many cells in each section is labelled as p3 or V3 and is tdTom traced?
+
+Use `count` to plot zero counts.
+
+```{r fig.width=5, fig.height=3}
+full_classified_tdtom_counts <- full_classified_tdtom %>%
+  filter(tdtom_status=="traced") %>%
+  mutate(celltype = factor(celltype, levels = c("p3","V3","Sox2_notp3","othercell"))) %>%
+  group_by(embryoID, position, tam) %>%
+  count(celltype,.drop=FALSE)
+
+
+ggplot(full_classified_tdtom_counts %>% filter(celltype %in% c("p3","V3")), aes(x=tam, y=n)) +
+  geom_col(aes(fill=embryoID),position=position_dodge2(0.9, preserve = "single")) +
+  geom_point(aes(fill=embryoID), color="black", shape=21,position=position_dodge2(0.9, preserve = "single")) +
+  facet_wrap(~ celltype) +
+  ylab("Number of tdTomato+ cells per section") +
+  xlab("Time of tamoxifen administration") +
+  theme_bw(base_size = 12)
+
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
