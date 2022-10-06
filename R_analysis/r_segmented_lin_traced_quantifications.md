@@ -5,8 +5,6 @@ Foxa2_tracing - quantifications and plotting
 # Load all packages
 rm(list=ls())
 
-setwd("~/dev/repos/tdTom_LinTracing/R_analysis/")
-
 library(tidyverse)
 library(readxl)
 library(pheatmap)
